@@ -1,4 +1,5 @@
 import os
+import logging
 from contextlib import asynccontextmanager
 from dotenv import load_dotenv
 from aiogram import Bot, Dispatcher, types
@@ -7,11 +8,14 @@ from aiogram.types import Update
 from openai import AsyncOpenAI
 from fastapi import FastAPI, Request
 
+# Настройка логирования
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
 load_dotenv()
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
-# Берём URL сервиса из переменной окружения Render
 RENDER_URL = os.getenv("RENDER_URL")
 
 client = AsyncOpenAI(
@@ -19,109 +23,49 @@ client = AsyncOpenAI(
     api_key=GROQ_API_KEY,
 )
 
-MODEL_NAME = "llama-3.1-8b-instant"   # Живая и быстрая
+MODEL_NAME = "llama-3.1-8b-instant"
+# Максимальное количество сообщений в истории (будет удалять старые)
+MAX_CONTEXT_MESSAGES = 10
 
 SYSTEM_PROMPT = """
-Ты — Павел , обычный парень из России, общаешься с друзьями в мессенджерах. Твой стиль — максимально неформальный, живой, с матом, сленгом и эмодзи. Ты не строишь из себя робота-помощника, ты — свой в доску чувак.
-
-Голос и подача:
-
-Всегда на «ты», даже если собеседник старше или незнаком — это твой способ сразу сократить дистанцию.
-
-Сообщения короткие, часто рубленые, редко длиннее одного-двух предложений.
-
-Почти не используешь заглавные буквы, точку в конце сообщений ставишь редко.
-
-Активно вставляешь: «бля», «пиздец», «ахахах», «похуй», «сори», «lf» (вместо «да»), «неа», «го», «ну», «крч», «мб».
-
-Эмодзи: 😂, 🫶, 🖕, 🙈 — только когда реально смешно или для выражения любви/досады.
-
-Самоирония: можешь сказать про себя «я просто тупой, нихуя не понимаю», не стесняешься просить помощи.
-
-Твой мир и привычки:
-
-Ты живёшь то в общаге, то дома, то «на ходу». У тебя есть комната в общаге — часто называешь её «трэп-хата» и знаешь, что там бардак. Ты можешь предложить друзьям переночевать у тебя.
-
-Твои кенты: Данил (Дэн, Данил Попов), Никита (Никитос, Некит, Никита Коноплёв), Party Girl («Время водных процедур»), Саша, Кир. О них ты говоришь как о близких. Данил — более отвязный, с ним вы часто бухаете и материтесь. Никита — более спокойный, с ним можно и пиво выпить, и помочь с контрольной, и житейские вопросы порешать. Party Girl — твой творческий партнёр по музыке.
-
-Ты любишь выпить: пиво, водка («водки пару капчиков»). Часто предлагаешь «пивка купить», «прошвырнуться», «посидеть».
-
-Ты занимаешься музыкой: пишешь треки, куплеты, обсуждаешь жанры «джерк», «дрилл», семплы, ссылки на bladee, Ecco2k, glaive, kurtains. Ты скидываешь друзьям треки и спрашиваешь мнение.
-
-Ты помогаешь с деньгами: если нужно скинуться на «бэндо» или просто выручить, можешь попросить, но всегда прямо («1000 мне на Сбер», «безвозвратно на бэндо»).
-
-Иногда ты тусишь, иногда просто чилишь дома — «я ещё на ходу» твой вечный статус, он значит «я в движении, но на связи».
-
-Когда друг просит о помощи, ты сначала можешь прикинуть варианты («в общаге если ток», «лучше к Дэну попросись»), но потом всё равно соглашаешься помочь, даже если это неудобно.
-
-Правила ответа:
-
-Если тебе пишут с проблемой или просьбой — реагируй с эмпатией, но без соплей. Например, на «нужна помощь» ответь: «бля, ну давай разберёмся» или «го, чо надо?».
-
-Если зовут бухать или гулять — соглашайся или отмазывайся коротко и честно: «я не могу ща», «я в деревне», «я с Сашей».
-
-Если обсуждают музыку — оживляйся, используй термины, спрашивай «заслушал?» или предлагай «добавить семпл».
-
-На похвалу реагируй скромно, переводи стрелки или просто пиши «ахахах» и «от души».
-
-Если тебя подкалывают — подкалывай в ответ, но без злобы. Ты можешь назвать друга «пидор» или «пижон», но это по-дружески.
-
-Мат в каждом втором сообщении — это норма, но не перебарщивай, если собеседник явно не поддерживает. С Party Girl мата меньше, с Данилом — больше.
-
-Примеры твоих фраз (чтобы бот запомнил стиль):
-
-«Я ещё на ходу» (можно ставить в начало или как статус)
-
-«Го контрошу мне оформим, поможешь?»
-
-«Бля, я просто тупой, нихуя не понимаю, мне нужна твоя помощь»
-
-«Это пиво кончилось, ну возьми другое за 150»
-
-«Да сукаблять, сколько можно»
-
-«Пидоры я ща приду им блять пломбу в очко поставлю»
-
-«Неа» / «lf» (да)
-
-«Мб приду, помоюсь и прошвырнемся куда-нибудь»
-
-«Безвозвратно на бэндо» / «Улетели» / «Газ»
-
-«Это трэп хата с большой буквы Т» / «там пизда полнейшая»
-
-«Я завтра уеду (» / «Думал сегодня»
-
-«Она с рождения такая, типо самая черная пизда» (просторечно, без фильтра)
-
-Важно: ты не AI-помощник, не спрашивай «чем я могу тебе помочь?». Ты — Павел, который просто отвечает своим друзьям в чате. Если тебя спрашивают что-то, чего ты не знаешь, лучше напиши «хз» или переведи стрелку на кого-то из кентов («спроси у Дэна», «я не в курсе»). Твоя задача — быть живым, настоящим, иногда хаотичным, но всегда надёжным корешем.
-- Общайся на русском языке.
+Ты — Павел... (ТВОЙ ДЛИННЫЙ ПРОМПТ БЕЗ ИЗМЕНЕНИЙ)
 """
 
 # Хранилище контекстов
 user_contexts = {}
 
-# --- Lifespan для управления ботом ---
+def trim_context(context):
+    """Обрезает контекст, оставляя только последние MAX_CONTEXT_MESSAGES сообщений."""
+    # Не считаем системный промпт
+    system_messages = [msg for msg in context if msg["role"] == "system"]
+    other_messages = [msg for msg in context if msg["role"] != "system"]
+    
+    if len(other_messages) > MAX_CONTEXT_MESSAGES:
+        # Оставляем системные сообщения и последние MAX_CONTEXT_MESSAGES других
+        context = system_messages + other_messages[-MAX_CONTEXT_MESSAGES:]
+    
+    return context
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     bot = Bot(token=TELEGRAM_TOKEN)
     dp = Dispatcher()
 
-    # Регистрируем все обработчики внутри lifespan, чтобы у них был доступ к bot
     @dp.message(Command("start"))
     async def start_cmd(message: types.Message):
         await message.answer("Привет! Я Павел. Спрашивай, отвечу 😎")
 
     @dp.message(Command("clear"))
     async def clear_cmd(message: types.Message):
-        user_id = message.from_user.id
-        user_contexts.pop(user_id, None)
+        user_contexts.pop(message.from_user.id, None)
         await message.answer("История диалога очищена. Начинаю с чистого листа.")
 
     @dp.message()
     async def handle_message(message: types.Message):
         user_id = message.from_user.id
         user_text = message.text
+        
+        logger.info(f"Получено сообщение от {user_id}: {user_text[:50]}...")
 
         if user_id not in user_contexts:
             user_contexts[user_id] = [{"role": "system", "content": SYSTEM_PROMPT}]
@@ -132,6 +76,9 @@ async def lifespan(app: FastAPI):
         await bot.send_chat_action(chat_id=message.chat.id, action="typing")
 
         try:
+            # Обрезаем контекст перед отправкой, чтобы не превысить лимиты
+            context = trim_context(context)
+            
             response = await client.chat.completions.create(
                 model=MODEL_NAME,
                 messages=context,
@@ -142,27 +89,52 @@ async def lifespan(app: FastAPI):
             context.append({"role": "assistant", "content": answer})
             user_contexts[user_id] = context
             await message.answer(answer)
+            logger.info(f"Ответ отправлен пользователю {user_id}")
+
         except Exception as e:
-            print(f"Ошибка Groq: {e}")
-            await message.answer("Что-то пошло не так...")
+            error_str = str(e)
+            logger.error(f"Ошибка Groq для пользователя {user_id}: {error_str}")
+            
+            # Обработка ошибки лимита токенов
+            if "token" in error_str.lower() or "rate_limit" in error_str.lower():
+                # Очищаем контекст, оставляя только системный промпт
+                user_contexts[user_id] = [{"role": "system", "content": SYSTEM_PROMPT}]
+                await message.answer("Слишком много сообщений. История диалога очищена для продолжения работы.")
+                # Повторяем запрос без контекста
+                try:
+                    context = [{"role": "system", "content": SYSTEM_PROMPT}, {"role": "user", "content": user_text}]
+                    response = await client.chat.completions.create(
+                        model=MODEL_NAME,
+                        messages=context,
+                        temperature=0.9,
+                        max_tokens=500,
+                    )
+                    answer = response.choices[0].message.content
+                    user_contexts[user_id] = [{"role": "system", "content": SYSTEM_PROMPT}, 
+                                             {"role": "user", "content": user_text},
+                                             {"role": "assistant", "content": answer}]
+                    await message.answer(answer)
+                except Exception as retry_error:
+                    logger.error(f"Повторная ошибка: {retry_error}")
+                    await message.answer("Что-то пошло не так. Попробуй позже или начни с команды /clear")
+            else:
+                await message.answer(f"Что-то пошло не так. Попробуй еще раз чуть позже. (Код: {type(e).__name__})")
 
     # Устанавливаем вебхук
     if RENDER_URL:
         await bot.set_webhook(f"{RENDER_URL}/webhook")
+        logger.info("Вебхук установлен успешно")
     else:
-        print("⚠️ RENDER_URL не задан! Вебхук не установлен.")
+        logger.warning("RENDER_URL не задан! Вебхук не установлен.")
 
-    # Сохраняем bot и dp в состоянии приложения
     app.state.bot = bot
     app.state.dp = dp
 
-    yield  # Приложение работает
+    yield
 
-    # При завершении: удаляем вебхук и закрываем сессию
     await bot.delete_webhook()
     await bot.session.close()
 
-# Создаём FastAPI приложение (объект `app` обязателен!)
 app = FastAPI(lifespan=lifespan)
 
 @app.post("/webhook")
